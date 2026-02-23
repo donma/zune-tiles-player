@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zune Player Emulator with Youtbue.</title>
+
+    <style>
+        :root {
+            --ui-white: rgba(255,255,255,.92);
+            --ui-dim: rgba(255,255,255,.65);
+            --shadow: 0 18px 40px rgba(0,0,0,.55);
+            --radius: 6px;
+            --tintA: rgba(155, 60, 160, .35);
+            --tintB: rgba(170, 190, 60, .28);
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: #0b0b0b;
+            overflow: hidden;
+            font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+        }
+
+        .stage {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        .bg {
+            position: absolute;
+            inset: -6%;
+            transform: translate3d(0,0,0);
+        }
+
+        .mosaic {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            grid-template-columns: repeat(var(--cols), 1fr);
+            grid-template-rows: repeat(var(--rows), 1fr);
+            gap: 2px;
+            filter: contrast(1.05) saturate(.95);
+        }
+
+        /* 背景磁磚牆暗遮罩：只壓暗背景，不影響前景 now-card */
+        .mosaic-dim {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,.65);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* 確保 mosaic 在遮罩下面、tint/vignette 在上面 */
+        .mosaic {
+            z-index: 1;
+        }
+
+        .tint {
+            z-index: 3;
+        }
+
+        .vignette {
+            z-index: 4;
+        }
+
+        .tile {
+            position: relative;
+            overflow: hidden;
+            background: #111;
+            border-radius: 2px;
+            perspective: 900px;
+            transform: translateZ(0);
+        }
+
+            .tile .inner {
+                width: 100%;
+                height: 100%;
+                transform-style: preserve-3d;
+                will-change: transform, filter;
+            }
+
+            .tile img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                display: block;
+                filter: grayscale(.15) contrast(1.03);
+                transform: scale(1.02);
+                backface-visibility: hidden;
+            }
+
+            .tile.flipY .inner {
+                animation-name: flipY360;
+                animation-timing-function: linear;
+                animation-iteration-count: infinite;
+            }
+
+        @keyframes flipY360 {
+            0% {
+                transform: rotateY(0deg);
+                filter: brightness(1);
+            }
+
+            50% {
+                transform: rotateY(180deg);
+                filter: brightness(.92);
+            }
+
+            100% {
+                transform: rotateY(360deg);
+                filter: brightness(1);
+            }
+        }
+
+        .tint {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(115deg, var(--tintA) 0%, transparent 42%, var(--tintB) 100%), radial-gradient(1200px 800px at 30% 60%, rgba(255,255,255,.05), transparent 55%), radial-gradient(1000px 700px at 75% 30%, rgba(0,0,0,.18), transparent 65%);
+            mix-blend-mode: screen;
+            pointer-events: none;
+        }
+
+        .vignette {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 45%, transparent 0 45%, rgba(0,0,0,.55) 72%, rgba(0,0,0,.82) 100%);
+            pointer-events: none;
+        }
+
+        /* ===== Foreground UI ===== */
+        .hud {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .now-card {
+            position: absolute;
+            left: 6%;
+            bottom: 12%;
+            display: flex;
+            gap: 18px;
+            align-items: flex-end;
+            pointer-events: auto;
+        }
+
+        /* cover 改成影片框（預設 16:9） */
+        .cover {
+            width: 320px;
+            height: 180px;
+            max-width: 46vw;
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            border: 2px solid rgba(255,255,255,.08);
+            background: #111;
+            flex: 0 0 auto;
+        }
+
+        /* YouTube IFrame API 會把 iframe 塞在這個容器內 */
+        #ytPlayer {
+            width: 100%;
+            height: 100%;
+        }
+
+        .meta {
+            color: var(--ui-white);
+            text-shadow: 0 2px 8px rgba(0,0,0,.6);
+            max-width: min(520px, 46vw);
+            word-break: break-word;
+        }
+
+        .artist {
+            font-size: 22px;
+            letter-spacing: 0.5px;
+            margin: 0 0 6px 0;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+
+        .album {
+            font-size: 13px;
+            letter-spacing: .2px;
+            margin: 0 0 10px 0;
+            color: var(--ui-dim);
+        }
+
+        .title {
+            font-size: 18px;
+            margin: 0;
+            color: var(--ui-white);
+        }
+
+        /* 進度條先隱藏 */
+        .progress {
+            display: none;
+        }
+
+        .controls {
+            position: absolute;
+            right: 5%;
+            bottom: 5%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(0,0,0,.22);
+            border: 1px solid rgba(255,255,255,.08);
+            box-shadow: 0 10px 24px rgba(0,0,0,.35);
+            pointer-events: auto;
+            user-select: none;
+            backdrop-filter: blur(6px);
+        }
+
+        .btn {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            color: rgba(255,255,255,.9);
+            background: rgba(255,255,255,.06);
+            border: 1px solid rgba(255,255,255,.08);
+            cursor: pointer;
+        }
+
+            .btn:active {
+                transform: translateY(1px);
+            }
+
+            .btn svg {
+                width: 18px;
+                height: 18px;
+                fill: currentColor;
+            }
+
+        @media (max-width: 720px) {
+            .cover {
+                width: 260px;
+                height: 146px;
+                max-width: 70vw;
+            }
+
+            .artist {
+                font-size: 18px;
+            }
+
+            .now-card {
+                left: 5%;
+                bottom: 14%;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="stage">
+        <div class="bg">
+            <div class="mosaic" id="mosaic"></div>
+            <div class="mosaic-dim"></div>
+            <div class="tint" id="tint"></div>
+            <div class="vignette"></div>
+        </div>
+
+        <div class="hud">
+            <div class="now-card">
+                <!-- ✅ cover 改成 YouTube IFrame Player API 容器（不再用固定 iframe src） -->
+                <div class="cover">
+                    <div id="ytPlayer"></div>
+                </div>
+
+                <div class="meta">
+                    <p class="artist" id="artist">（讀取 YouTube 標題中...）</p>
+                    <p class="album" id="album"></p>
+                    <p class="title" id="title">Larc' Studio</p>
+                </div>
+            </div>
+
+            <div class="progress">
+                <div class="time left" id="tLeft">0:00</div>
+                <div class="time right" id="tRight">-3:32</div>
+                <div class="bar"><div class="fill" id="fill"></div></div>
+            </div>
+
+            <div class="controls">
+                <div class="btn" id="btnPrev" title="Prev">
+                    <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6V6zm3.5 6 10-6v12l-10-6z" /></svg>
+                </div>
+                <div class="btn" id="btnPlay" title="Play/Pause">
+                    <svg id="iconPlay" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                    <svg id="iconPause" viewBox="0 0 24 24" style="display:none"><path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" /></svg>
+                </div>
+                <div class="btn" id="btnNext" title="Next">
+                    <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2V6zM4.5 18V6l10 6-10 6z" /></svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // =============================
+        // 1) YouTube playlist + controls
+        // =============================
+        const YT_LIST = [
+            "https://www.youtube.com/watch?v=z_ejBImnOf0",
+            "https://www.youtube.com/watch?v=mx9Npfwf8xQ",
+            "https://www.youtube.com/watch?v=amAVTzMJQic",
+            "https://www.youtube.com/watch?v=Pm6M4IvZhwo"
+        ];
+
+        function getYouTubeId(url) {
+            try {
+                const u = new URL(url);
+                if (u.hostname.includes("youtu.be")) return u.pathname.replace("/", "");
+                return u.searchParams.get("v");
+            } catch {
+                return null;
+            }
+        }
+
+        const artistEl = document.getElementById("artist");
+        const albumEl = document.getElementById("album");
+        const titleEl = document.getElementById("title");
+
+        const btnPrev = document.getElementById("btnPrev");
+        const btnNext = document.getElementById("btnNext");
+        const btnPlay = document.getElementById("btnPlay");
+        const iconPlay = document.getElementById("iconPlay");
+        const iconPause = document.getElementById("iconPause");
+
+        let currentIndex = 0;  // ✅ 預設第一首
+        let player = null;
+        let isPlaying = true;
+
+        function setPlayIcon(playing) {
+            // 你原本的 icon 設計：播放時顯示 Pause icon
+            iconPlay.style.display = playing ? "none" : "";
+            iconPause.style.display = playing ? "" : "none";
+        }
+
+        async function setYouTubeMeta(url) {
+            albumEl.textContent = url;              // TO HEBE -> URL
+            titleEl.textContent = "Larc' Studio";   // 寂寞寂寞就好 -> "Larc' Studio"
+
+            try {
+                const oembed = "https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(url);
+                const resp = await fetch(oembed, { cache: "no-store" });
+                if (!resp.ok) throw new Error("oEmbed failed: " + resp.status);
+                const json = await resp.json();
+                artistEl.textContent = (json && json.title) ? json.title : "(no title)";
+            } catch {
+                artistEl.textContent = "(YouTube title fetch failed)";
+            }
+        }
+
+        function loadIndex(idx, autoplay = true) {
+            if (idx < 0) idx = YT_LIST.length - 1;
+            if (idx >= YT_LIST.length) idx = 0;
+
+            currentIndex = idx;
+
+            const url = YT_LIST[currentIndex];
+            const vid = getYouTubeId(url);
+
+            // 更新文字
+            setYouTubeMeta(url);
+
+            // 播放器載入
+            if (player && vid) {
+                player.loadVideoById({ videoId: vid, startSeconds: 0 });
+                if (!autoplay) player.pauseVideo();
+            }
+
+            isPlaying = autoplay;
+            setPlayIcon(isPlaying);
+        }
+
+        // YouTube IFrame Player API
+        function injectYouTubeApi() {
+            const tag = document.createElement("script");
+            tag.src = "https://www.youtube.com/iframe_api";
+            document.head.appendChild(tag);
+        }
+
+        // API callback（YouTube 會找 window.onYouTubeIframeAPIReady）
+        window.onYouTubeIframeAPIReady = function () {
+            const firstUrl = YT_LIST[0];
+            const firstId = getYouTubeId(firstUrl);
+
+            player = new YT.Player("ytPlayer", {
+                width: "100%",
+                height: "100%",
+                videoId: firstId,
+                playerVars: {
+                    autoplay: 1,           // ✅ 預設就播放第一首
+                    controls: 1,
+                    rel: 0,
+                    modestbranding: 1,
+                    playsinline: 1
+                },
+                events: {
+                    onReady: function () {
+                        // 某些瀏覽器會擋自動播放：先 mute 再 play 比較容易成功
+                        try { player.mute(); } catch { }
+                        try { player.playVideo(); } catch { }
+
+                        loadIndex(0, true);
+                    },
+                    onStateChange: function (e) {
+                        // 0 = ended
+                        if (e.data === YT.PlayerState.ENDED) {
+                            // ✅ 播完自動下一首，尾端回到第一首
+                            loadIndex(currentIndex + 1, true);
+                        }
+
+                        if (e.data === YT.PlayerState.PLAYING) {
+                            isPlaying = true;
+                            setPlayIcon(true);
+                        } else if (e.data === YT.PlayerState.PAUSED) {
+                            isPlaying = false;
+                            setPlayIcon(false);
+                        }
+                    }
+                }
+            });
+        };
+
+        btnNext.addEventListener("click", () => loadIndex(currentIndex + 1, true));
+        btnPrev.addEventListener("click", () => loadIndex(currentIndex - 1, true));
+
+        btnPlay.addEventListener("click", () => {
+            if (!player) return;
+
+            const state = player.getPlayerState();
+            // 1=PLAYING, 2=PAUSED, 0=ENDED, -1=UNSTARTED
+            if (state === YT.PlayerState.PLAYING) {
+                player.pauseVideo();
+                isPlaying = false;
+                setPlayIcon(false);
+            } else {
+                // 某些情況要先 mute 才給播放
+                try { player.mute(); } catch { }
+                player.playVideo();
+                isPlaying = true;
+                setPlayIcon(true);
+            }
+        });
+
+        // 預先顯示第一首 URL（標題等 API 回來再更新）
+        setYouTubeMeta(YT_LIST[0]);
+        setPlayIcon(true);
+        injectYouTubeApi();
+    </script>
+
+    <script>
+        // =============================
+        // 2) 你的背景磁磚牆（原封不動）
+        // =============================
+        const ALBUMS = [
+            "https://coverartarchive.org/release/b7d4861c-3ad4-4155-b197-38132abacb18/front-500",
+            "https://coverartarchive.org/release/a0704b30-faf4-4909-b61d-7b1cd9a55575/front-500",
+            "https://coverartarchive.org/release/fe144cbc-82f8-487f-870a-7f028d84dd7c/front-500",
+            "https://coverartarchive.org/release/f5b7cd54-f503-40bb-9192-10c26d5bb9c4/front-500",
+            "https://coverartarchive.org/release/0fa64d47-1c8c-4775-8054-0f1615527fbe/front-500",
+            "https://coverartarchive.org/release/a824158a-b01b-4976-be1f-5a4df0d338dc/front-500",
+            "https://coverartarchive.org/release/babe4f7e-3b39-4c5b-b37b-0cd8dcc5cced/front-500",
+            "https://coverartarchive.org/release/9066e88b-cff4-4bfd-b4ae-4e0e3015c2f6/front-500",
+            "https://coverartarchive.org/release/019cf8b3-a135-4fca-a84f-2dc9a2ecf01b/front-500",
+            "https://coverartarchive.org/release/41eaa48a-4a84-496a-8851-deed2543f605/front-500",
+            "https://coverartarchive.org/release/cf13eec4-4c8c-4186-a8f0-958c9f6aaab3/front-500",
+            "https://coverartarchive.org/release/1cd6619e-546a-451a-a99f-f95644b633c7/front-500",
+            "https://coverartarchive.org/release/38615a93-c454-433b-8089-201d24ea8539/front-500",
+            "https://coverartarchive.org/release/87ad05dd-727b-457b-9b93-d40fc57e62df/front-500",
+            "https://coverartarchive.org/release/1090b0e3-2338-4b5a-bf6e-1568f56aaf1f/front-500",
+            "https://coverartarchive.org/release/1e8504a3-cfe8-4d3a-b22c-278fb4c571dc/front-500",
+            "https://coverartarchive.org/release/4ecbbffd-764b-488c-94b8-3974ac91b54a/front-500",
+            "https://coverartarchive.org/release/097aa6fc-f100-4f8c-bb07-c82b9a574cf3/front-500",
+            "https://coverartarchive.org/release/fd3ccc98-28e7-4823-97a5-02cd25f17095/front-500",
+            "https://coverartarchive.org/release/b508bc61-2d08-429f-adee-2c3da08673bd/front-500",
+            "https://coverartarchive.org/release/5f39e401-05d7-485c-9bd5-9eb036375906/front-500",
+            "https://coverartarchive.org/release/4c649502-3961-4f2a-a1d7-fbed45ba1526/front-500",
+            "https://coverartarchive.org/release/6b11b64b-260e-4d2b-bc7a-20659b185b85/front-500",
+            "https://coverartarchive.org/release/65fd1357-a7d6-42cd-9250-55d3d5538a5f/front-500",
+            "https://coverartarchive.org/release/0a5470fc-b147-42d9-bb8b-1fca2e8add90/front-500",
+            "https://coverartarchive.org/release/65e47b62-1568-4c9a-8aff-0f4e372da6d3/front-500",
+            "https://coverartarchive.org/release/f834d7b3-2681-488f-97dc-3f9ccf380651/front-500",
+            "https://coverartarchive.org/release/4ea6b857-056c-4496-a831-2551a28fb220/front-500",
+            "https://coverartarchive.org/release/cde7f833-2271-454e-85e9-f042e452c390/front-500",
+            "https://coverartarchive.org/release/8ea0ffd6-43f5-402e-87da-a02e038890b4/front-500",
+            "https://coverartarchive.org/release/43178e42-f4f2-498b-b8ca-98a19506ffb3/front-500",
+            "https://coverartarchive.org/release/cc3da954-6619-4dac-b768-1e1280536c4d/front-500",
+            "https://coverartarchive.org/release/235bfb6b-2d7f-41f3-b19f-5c57a3917565/front-500",
+            "https://coverartarchive.org/release/0878bbc8-6bdd-4fc8-a6e5-8f006131bf3f/front-500",
+            "https://coverartarchive.org/release/6a30c7cb-0ede-47bf-aae1-c65d0d2b32ca/front-500",
+            "https://coverartarchive.org/release/7bb85b37-59bc-47eb-b907-3f91adc15c76/front-500",
+            "https://coverartarchive.org/release/3afc41f7-cb0a-4144-a45d-f70ef28e6f4b/front-500",
+            "https://coverartarchive.org/release/adce977a-386e-4185-ba79-5c9c20e7c748/front-500",
+            "https://coverartarchive.org/release/a710a2fe-9432-44f8-b0dd-b1d2d6140d78/front-500",
+            "https://coverartarchive.org/release/bac12903-4d62-48c6-bb8c-13ffe3cd0732/front-500",
+            "https://coverartarchive.org/release/66eb4391-86c7-48af-9471-420f9c86986e/front-500",
+            "https://coverartarchive.org/release/393408be-f508-4391-8607-a162f0006dc9/front-500",
+            "https://coverartarchive.org/release/2b586814-d913-458d-a36d-845216c8935c/front-500",
+            "https://coverartarchive.org/release/54328264-4963-4128-91c5-ccfcb6881fdc/front-500",
+            "https://coverartarchive.org/release/57fdce94-a5ec-4505-a987-1aae49fad75a/front-500",
+            "https://coverartarchive.org/release/b105df8f-5789-48e8-ba69-5e50a6c0234b/front-500",
+            "https://coverartarchive.org/release/88e0cbd7-2fd5-46c2-bb39-2a18bc9014d1/front-500",
+            "https://coverartarchive.org/release/1ebb8462-2261-40ba-99c6-ff18118b29fa/front-500",
+            "https://coverartarchive.org/release/831232ee-d9d0-4103-9a0b-56bc5f39a60c/front-500",
+            "https://coverartarchive.org/release/8a92f23c-27f7-4180-ba83-e04f3bff0065/front-500"
+        ];
+
+        const mosaic = document.getElementById("mosaic");
+
+        function rint(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+        function makeImgWithFallback(startIndex) {
+            const img = document.createElement("img");
+            img.loading = "lazy";
+            img.decoding = "async";
+            img.dataset.try = "0";
+            img.dataset.startIndex = String(startIndex);
+
+            const setSrc = (idx) => {
+                const base = ALBUMS[idx % ALBUMS.length];
+                const bust = `cb=${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                img.src = base + (base.includes("?") ? "&" : "?") + bust;
+            };
+
+            img.onerror = () => {
+                const tried = parseInt(img.dataset.try || "0", 10) + 1;
+                img.dataset.try = String(tried);
+
+                if (tried > 8) {
+                    img.removeAttribute("src");
+                    img.style.background = "#111";
+                    return;
+                }
+
+                const start = parseInt(img.dataset.startIndex || "0", 10);
+                setSrc(start + tried);
+            };
+
+            setSrc(startIndex);
+            return img;
+        }
+
+        function buildMosaic() {
+            mosaic.innerHTML = "";
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            const cell = Math.max(78, Math.min(128, Math.floor(w / 11)));
+            const cols = Math.ceil((w * 1.12) / cell);
+            const rows = Math.ceil((h * 1.12) / cell);
+
+            mosaic.style.setProperty("--cols", cols);
+            mosaic.style.setProperty("--rows", rows);
+
+            const used = Array.from({ length: rows }, () => Array(cols).fill(false));
+
+            const shapes = [
+                { w: 1, h: 1, weight: 55 },
+                { w: 2, h: 1, weight: 10 },
+                { w: 1, h: 2, weight: 10 },
+                { w: 2, h: 2, weight: 14 },
+                { w: 3, h: 2, weight: 5 },
+                { w: 2, h: 3, weight: 4 },
+                { w: 3, h: 3, weight: 2 },
+            ];
+
+            function weightedShape() {
+                const total = shapes.reduce((s, x) => s + x.weight, 0);
+                let roll = Math.random() * total;
+                for (const s of shapes) {
+                    roll -= s.weight;
+                    if (roll <= 0) return { w: s.w, h: s.h };
+                }
+                return { w: 1, h: 1 };
+            }
+
+            function canPlace(x, y, sw, sh) {
+                if (x + sw > cols || y + sh > rows) return false;
+                for (let yy = y; yy < y + sh; yy++) {
+                    for (let xx = x; xx < x + sw; xx++) {
+                        if (used[yy][xx]) return false;
+                    }
+                }
+                return true;
+            }
+
+            function markUsed(x, y, sw, sh) {
+                for (let yy = y; yy < y + sh; yy++) {
+                    for (let xx = x; xx < x + sw; xx++) {
+                        used[yy][xx] = true;
+                    }
+                }
+            }
+
+            let imgIndex = 0;
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    if (used[y][x]) continue;
+
+                    let sw = 1, sh = 1;
+                    for (let attempt = 0; attempt < 8; attempt++) {
+                        const s = weightedShape();
+                        if (canPlace(x, y, s.w, s.h)) { sw = s.w; sh = s.h; break; }
+                    }
+                    if (!canPlace(x, y, sw, sh)) { sw = 1; sh = 1; }
+                    markUsed(x, y, sw, sh);
+
+                    const tile = document.createElement("div");
+                    tile.className = "tile";
+                    tile.style.gridColumn = `${x + 1} / span ${sw}`;
+                    tile.style.gridRow = `${y + 1} / span ${sh}`;
+
+                    const willFlip = Math.random() < 0.06;
+                    if (willFlip) tile.classList.add("flipY");
+
+                    const inner = document.createElement("div");
+                    inner.className = "inner";
+
+                    if (willFlip) {
+                        const dur = rint(8, 16);
+                        const delay = rint(-20, 0);
+                        inner.style.animationDuration = `${dur}s`;
+                        inner.style.animationDelay = `${delay}s`;
+                    }
+
+                    const img = makeImgWithFallback(imgIndex);
+                    imgIndex++;
+
+                    inner.appendChild(img);
+                    tile.appendChild(inner);
+                    mosaic.appendChild(tile);
+                }
+            }
+        }
+
+        buildMosaic();
+        window.addEventListener("resize", buildMosaic);
+    </script>
+</body>
+</html>

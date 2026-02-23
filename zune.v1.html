@@ -406,10 +406,7 @@
                 events: {
                     onReady: function () {
                         // 某些瀏覽器會擋自動播放：先 mute 再 play 比較容易成功
-                        try { player.mute(); } catch { }
-                        try { player.playVideo(); } catch { }
-
-                        loadIndex(0, true);
+                        loadIndex(0, false); // 不自動播放
                     },
                     onStateChange: function (e) {
                         // 0 = ended
@@ -437,16 +434,13 @@
             if (!player) return;
 
             const state = player.getPlayerState();
-            // 1=PLAYING, 2=PAUSED, 0=ENDED, -1=UNSTARTED
+
             if (state === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
-                isPlaying = false;
                 setPlayIcon(false);
             } else {
-                // 某些情況要先 mute 才給播放
-                try { player.mute(); } catch { }
+                player.unMute();   // 🔥 手機需要
                 player.playVideo();
-                isPlaying = true;
                 setPlayIcon(true);
             }
         });
